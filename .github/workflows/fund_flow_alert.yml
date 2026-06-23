@@ -1,0 +1,81 @@
+name: 資金流入動向レポート
+
+on:
+  schedule:
+    # 米国市場閉場後（EST 16:00 = JST 翌06:00）月〜金
+    - cron: "0 21 * * 1-5"   # UTC 21:00 = JST 翌06:00
+    # 日本市場閉場後（JST 15:30 = UTC 06:30）月〜金
+    - cron: "30 6 * * 1-5"   # UTC 06:30 = JST 15:30
+
+  # 手動実行（テスト用）
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "dry-run（メール送信なし）"
+        required: false
+        default: "false"
+      lookback:
+        description: "分析期間（営業日）"
+        required: false
+        default: "5"
+      market:
+        description: "実行タイミング (us_close / jp_close)"
+        required: false
+        default: "us_close"
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 セットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 依存ライブラリをインストール
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: テスト実行
+        run: |
+          cd /home/runner/work/fund_flow_alert/fund_flow_alert
+          python -m pytest tests/ -v --tb=short
+
+      - name: レポート生成・メール送信（スケジュール実行）
+        if: github.event_name == 'schedule'
+        env:
+          GMAIL_ADDRESS:      ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL:       ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          python src/main.py --lookback 5
+
+      - name: レポート生成・メール送信（手動実行）
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GMAIL_ADDRESS:      ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL:       ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
+          LOOKBACK="${{ github.event.inputs.lookback }}"
+          if [ "$DRY_RUN" = "true" ]; then
+            python src/main.py --dry-run --lookback "$LOOKBACK"
+          else
+            python src/main.py --lookback "$LOOKBACK"
+          fi
+
+      - name: dry-run 結果をアーティファクトとして保存
+        if: github.event.inputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-html
+          path: report_output.html
+          retention-days: 3
